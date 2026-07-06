@@ -1,0 +1,6 @@
+{
+  "name": "AI Code Sandbox",
+  "description": "An interactive AI-powered coding playground and chatbot where you can chat, write, edit, and execute JavaScript, Python, and web technologies in an isolated sandbox.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
