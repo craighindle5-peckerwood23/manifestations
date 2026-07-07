@@ -281,6 +281,23 @@ What should we build first?`,
   const [fileSearch, setFileSearch] = useState<string>("");
   const [saveStatus, setSaveStatus] = useState<"saved" | "unsaved" | "saving">("saved");
 
+  // Onboarding Tutorial Pop-up States
+  const [showTutorial, setShowTutorial] = useState<boolean>(() => {
+    const seen = localStorage.getItem("sandbox_tutorial_seen");
+    return seen !== "true";
+  });
+  const [tutorialStep, setTutorialStep] = useState<number>(1);
+
+  const handleCloseTutorial = () => {
+    setShowTutorial(false);
+    localStorage.setItem("sandbox_tutorial_seen", "true");
+  };
+
+  const handleOpenTutorial = () => {
+    setTutorialStep(1);
+    setShowTutorial(true);
+  };
+
   const chatEndRef = useRef<HTMLDivElement>(null);
   const activeFile = files.find(f => f.id === activeFileId) || files[0];
 
@@ -1075,6 +1092,15 @@ print("=" * 40)`;
           <div className="flex items-center gap-1.5">
             <button
               type="button"
+              onClick={handleOpenTutorial}
+              className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-purple-300 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all border border-purple-900/30 hover:border-purple-800/40"
+              title="Open Sandbox Onboarding Tutorial"
+            >
+              <HelpCircle size={13} className="text-purple-400" />
+              <span className="hidden sm:inline">Tutorial Guide</span>
+            </button>
+            <button
+              type="button"
               onClick={handleResetWorkspace}
               className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all border border-slate-700/50"
               title="Reset workspace to default template files"
@@ -1597,6 +1623,213 @@ print("=" * 40)`;
         </section>
 
       </main>
+
+      {/* 🌌 Interactive Onboarding & Tutorial Guide Popup */}
+      {showTutorial && (
+        <div id="tutorial-overlay" className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4 select-none animate-fade-in">
+          <div className="bg-slate-900/95 border border-slate-800 rounded-3xl max-w-2xl w-full overflow-hidden shadow-2xl flex flex-col relative animate-scale-up">
+            
+            {/* Top Glow bar */}
+            <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-purple-500 via-pink-500 to-indigo-500"></div>
+            
+            {/* Modal Close Button */}
+            <button
+              type="button"
+              onClick={handleCloseTutorial}
+              className="absolute top-4 right-4 p-2 text-slate-500 hover:text-white hover:bg-slate-800/80 rounded-full transition-colors"
+              title="Close Tutorial"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+
+            {/* Modal Body */}
+            <div className="p-6 md:p-8 flex-1 flex flex-col">
+              
+              {/* Header Status / Badge */}
+              <div className="flex items-center gap-2 mb-4">
+                <span className="text-[10px] bg-purple-500/10 border border-purple-500/30 text-purple-400 font-bold px-2.5 py-1 rounded-full uppercase tracking-wider font-mono">
+                  Sandbox Tutorial Guide • Step {tutorialStep} of 4
+                </span>
+              </div>
+
+              {/* Step Dynamic Rendering */}
+              <div className="flex-1 space-y-6 min-h-[280px]">
+                {tutorialStep === 1 && (
+                  <div className="space-y-4 animate-fade-in">
+                    <div className="flex items-center gap-3">
+                      <div className="p-3.5 bg-purple-600/20 text-purple-400 rounded-2xl border border-purple-500/30 shadow-lg shadow-purple-500/10">
+                        <Sparkles size={24} className="text-purple-400" />
+                      </div>
+                      <div>
+                        <h3 className="text-xl font-extrabold text-white tracking-tight">AI Code Sandbox V1.4 Pro</h3>
+                        <p className="text-xs text-slate-500">High-Performance Multilingual Environment</p>
+                      </div>
+                    </div>
+
+                    <p className="text-slate-300 text-sm leading-relaxed">
+                      Welcome to your full-scale prototyping and system scaffolding environment! This application is designed to help you construct fully-fledged codebases.
+                    </p>
+
+                    <div className="bg-slate-950/80 rounded-2xl p-4 border border-slate-800/80 space-y-3">
+                      <h4 className="text-xs font-bold text-slate-400 font-mono tracking-wider uppercase">✨ Next-Gen Systems & HDC Ready</h4>
+                      <p className="text-xs text-slate-400 leading-relaxed">
+                        Optimized to define, test, and ladder sophisticated scripts including **Next.js web setups**, **Nest.js server configurations**, and advanced mathematics like **Hyperdimensional Computing (HDC/VSA)**, global numerical mesh tensor networks, and hyperbolic graphs.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {tutorialStep === 2 && (
+                  <div className="space-y-4 animate-fade-in">
+                    <div className="flex items-center gap-3">
+                      <div className="p-3.5 bg-blue-600/20 text-blue-400 rounded-2xl border border-blue-500/30 shadow-lg shadow-blue-500/10">
+                        <Code size={24} className="text-blue-400" />
+                      </div>
+                      <div>
+                        <h3 className="text-xl font-extrabold text-white tracking-tight">Chat & Scaffolding Workspace</h3>
+                        <p className="text-xs text-slate-500">Conversational Blueprint Generator</p>
+                      </div>
+                    </div>
+
+                    <p className="text-slate-300 text-sm leading-relaxed">
+                      Interact directly with the AI Assistant using the chat panel. Ask the AI to build widgets, full scripts, or directory configurations (e.g. <code className="text-purple-300 bg-slate-950 px-1 py-0.5 rounded font-mono text-xs">"Create a Python NumPy HDC reasoning library"</code>).
+                    </p>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div className="p-3.5 bg-slate-950/60 rounded-xl border border-slate-800/80 space-y-1">
+                        <span className="text-xs font-bold text-white block">📂 Instant Load File</span>
+                        <span className="text-[11px] text-slate-400 block leading-relaxed">Click the <strong>"Load File"</strong> button on any generated code block to load it directly into your workspace.</span>
+                      </div>
+                      <div className="p-3.5 bg-slate-950/60 rounded-xl border border-slate-800/80 space-y-1">
+                        <span className="text-xs font-bold text-white block">⚡ Direct Execution</span>
+                        <span className="text-[11px] text-slate-400 block leading-relaxed">Click <strong>"Run Now"</strong> to execute server-side scripts immediately inside the terminal sandbox!</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {tutorialStep === 3 && (
+                  <div className="space-y-4 animate-fade-in">
+                    <div className="flex items-center gap-3">
+                      <div className="p-3.5 bg-indigo-600/20 text-indigo-400 rounded-2xl border border-indigo-500/30 shadow-lg shadow-indigo-500/10">
+                        <Monitor size={24} className="text-indigo-400" />
+                      </div>
+                      <div>
+                        <h3 className="text-xl font-extrabold text-white tracking-tight">Split Preview & Sandbox Console</h3>
+                        <p className="text-xs text-slate-500">Interactive Web Apps & Script Execution</p>
+                      </div>
+                    </div>
+
+                    <p className="text-slate-300 text-sm leading-relaxed">
+                      Toggle the run views dynamically using the top control bar in the execution pane:
+                    </p>
+
+                    <div className="space-y-2.5">
+                      <div className="flex gap-3 items-start">
+                        <span className="px-2 py-0.5 bg-purple-500/20 border border-purple-500/30 text-purple-300 rounded font-mono text-xs mt-0.5">Interactive Preview</span>
+                        <p className="text-xs text-slate-400 flex-1 leading-relaxed">
+                          Renders fully interactive HTML markup with standard client scripts and dynamic Tailwind UI layouts instantly in real-time.
+                        </p>
+                      </div>
+                      <div className="flex gap-3 items-start">
+                        <span className="px-2 py-0.5 bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 rounded font-mono text-xs mt-0.5">Terminal Console</span>
+                        <p className="text-xs text-slate-400 flex-1 leading-relaxed">
+                          Fires up sandboxed secure Node.js and Python processes directly on our container cluster to execute calculations, print metrics, and view real console output.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {tutorialStep === 4 && (
+                  <div className="space-y-4 animate-fade-in">
+                    <div className="flex items-center gap-3">
+                      <div className="p-3.5 bg-emerald-600/20 text-emerald-400 rounded-2xl border border-emerald-500/30 shadow-lg shadow-emerald-500/10">
+                        <Download size={24} className="text-emerald-400" />
+                      </div>
+                      <div>
+                        <h3 className="text-xl font-extrabold text-white tracking-tight">Mock Repo & Zip Download</h3>
+                        <p className="text-xs text-slate-500">Scaffold Locally, Run Online</p>
+                      </div>
+                    </div>
+
+                    <p className="text-slate-300 text-sm leading-relaxed">
+                      Build nested file directory maps mirroring a standard GitHub repository (such as React, Nest.js, Next.js setups).
+                    </p>
+
+                    <div className="bg-slate-950/85 rounded-xl p-4 border border-slate-800/80 space-y-2 text-xs text-slate-400 leading-relaxed">
+                      <div className="flex items-center gap-2 text-white font-semibold">
+                        <FolderCode size={14} className="text-indigo-400" />
+                        <span>Offline Scaffold Deployment Pattern:</span>
+                      </div>
+                      <ol className="list-decimal pl-4 space-y-1 font-mono text-[11px] text-slate-300">
+                        <li>Instruct AI to construct a project framework directory ladder</li>
+                        <li>Export your workspace using the zip download function</li>
+                        <li>Unpack on a local drive (thumb drive, cloud backup, or SD Card)</li>
+                        <li>Push files to your remote GitHub repo and execute cleanly</li>
+                      </ol>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Progress and controls footer */}
+              <div className="mt-8 pt-4 border-t border-slate-800/60 flex items-center justify-between">
+                
+                {/* Dots */}
+                <div className="flex gap-1.5">
+                  {[1, 2, 3, 4].map((step) => (
+                    <button
+                      key={step}
+                      type="button"
+                      onClick={() => setTutorialStep(step)}
+                      className={`w-2.5 h-2.5 rounded-full transition-all ${
+                        tutorialStep === step ? "bg-purple-500 w-6" : "bg-slate-700 hover:bg-slate-600"
+                      }`}
+                      title={`Go to step ${step}`}
+                    />
+                  ))}
+                </div>
+
+                {/* Control buttons */}
+                <div className="flex gap-2">
+                  {tutorialStep > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setTutorialStep(prev => prev - 1)}
+                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-xl transition-all border border-slate-700/50"
+                    >
+                      Back
+                    </button>
+                  )}
+
+                  {tutorialStep < 4 ? (
+                    <button
+                      type="button"
+                      onClick={() => setTutorialStep(prev => prev + 1)}
+                      className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold rounded-xl transition-all shadow-md shadow-purple-600/10"
+                    >
+                      Next Step
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleCloseTutorial}
+                      className="px-5 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-extrabold rounded-xl transition-all shadow-lg shadow-purple-600/25 border border-purple-400/20"
+                    >
+                      Got It, Let's Code!
+                    </button>
+                  )}
+                </div>
+
+              </div>
+
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 🚀 Simple status footer */}
       <footer className="bg-slate-900 border-t border-slate-800/80 px-6 py-2 flex flex-wrap items-center justify-between text-xs text-slate-500">
