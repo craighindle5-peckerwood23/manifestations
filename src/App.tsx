@@ -21,9 +21,28 @@ import {
   Layers3,
   Bookmark,
   Bug,
-  FolderCode
+  FolderCode,
+  Cloud,
+  LogOut,
+  Upload,
+  FolderOpen,
+  FolderArchive,
+  MessageSquare,
+  LayoutGrid,
+  LayoutList
 } from "lucide-react";
 import { FileSnippet, Message, ExecutionResult, Language } from "./types";
+import JSZip from "jszip";
+import {
+  initAuth,
+  googleSignIn,
+  logoutDrive,
+  listDriveFiles,
+  downloadDriveFile,
+  uploadDriveFile,
+  formatBytes,
+  DriveFile
+} from "./drive";
 
 const INITIAL_FILES: FileSnippet[] = [
   {
@@ -275,11 +294,250 @@ What should we build first?`,
   });
 
   // Modal / File actions state
+  const [layoutMode, setLayoutMode] = useState<"dashboard" | "tabs">("tabs");
+  const [activeMainTab, setActiveMainTab] = useState<"chat" | "editor" | "files">("editor");
   const [isCreatingFile, setIsCreatingFile] = useState<boolean>(false);
   const [newFileName, setNewFileName] = useState<string>("");
   const [newFileLang, setNewFileLang] = useState<Language>("javascript");
   const [fileSearch, setFileSearch] = useState<string>("");
   const [saveStatus, setSaveStatus] = useState<"saved" | "unsaved" | "saving">("saved");
+
+  // ZIP Import State
+  const [isImportingZip, setIsImportingZip] = useState<boolean>(false);
+  const [zipSuccessMessage, setZipSuccessMessage] = useState<string | null>(null);
+  const [zipError, setZipError] = useState<string | null>(null);
+  const zipInputRef = useRef<HTMLInputElement>(null);
+
+  // ==========================================
+  // GOOGLE DRIVE SYNC STATES & INTEGRATION
+  // ==========================================
+  const [explorerTab, setExplorerTab] = useState<"local" | "drive">("local");
+  const [driveUser, setDriveUser] = useState<any | null>(null);
+  const [driveToken, setDriveToken] = useState<string | null>(null);
+  const [driveFiles, setDriveFiles] = useState<DriveFile[]>([]);
+  const [driveSearch, setDriveSearch] = useState<string>("");
+  const [isFetchingDrive, setIsFetchingDrive] = useState<boolean>(false);
+  const [driveError, setDriveError] = useState<string | null>(null);
+  const [isExportingDrive, setIsExportingDrive] = useState<boolean>(false);
+  const [driveSyncStatus, setDriveSyncStatus] = useState<string | null>(null);
+  const [importedFilesMap, setImportedFilesMap] = useState<Record<string, string>>(() => {
+    try {
+      const saved = localStorage.getItem("sandbox_imported_files_map");
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  // Persist mapping between local file ID and Google Drive file ID
+  useEffect(() => {
+    localStorage.setItem("sandbox_imported_files_map", JSON.stringify(importedFilesMap));
+  }, [importedFilesMap]);
+
+  // Listen to Auth state changes on load
+  useEffect(() => {
+    const unsubscribe = initAuth(
+      async (user, token) => {
+        setDriveUser(user);
+        setDriveToken(token);
+        setIsFetchingDrive(true);
+        try {
+          const files = await listDriveFiles(token);
+          setDriveFiles(files);
+        } catch (err: any) {
+          console.error("Auto load drive files failed:", err);
+          setDriveError(err.message || "Failed to load files from Google Drive.");
+        } finally {
+          setIsFetchingDrive(false);
+        }
+      },
+      () => {
+        setDriveUser(null);
+        setDriveToken(null);
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
+  const handleDriveLogin = async () => {
+    setDriveError(null);
+    setIsFetchingDrive(true);
+    try {
+      const result = await googleSignIn();
+      if (result) {
+        setDriveUser(result.user);
+        setDriveToken(result.accessToken);
+        setDriveSyncStatus("Authenticated successfully!");
+        const files = await listDriveFiles(result.accessToken);
+        setDriveFiles(files);
+        setTimeout(() => setDriveSyncStatus(null), 4000);
+      }
+    } catch (err: any) {
+      setDriveError(err.message || "Authentication with Google Drive failed.");
+    } finally {
+      setIsFetchingDrive(false);
+    }
+  };
+
+  const handleDriveLogout = async () => {
+    try {
+      await logoutDrive();
+      setDriveUser(null);
+      setDriveToken(null);
+      setDriveFiles([]);
+      setDriveSyncStatus("Signed out of Google Drive.");
+      setTimeout(() => setDriveSyncStatus(null), 3000);
+    } catch (err: any) {
+      setDriveError(err.message || "Sign out failed.");
+    }
+  };
+
+  const handleRefreshDriveFiles = async () => {
+    if (!driveToken) return;
+    setIsFetchingDrive(true);
+    setDriveError(null);
+    try {
+      const files = await listDriveFiles(driveToken, driveSearch);
+      setDriveFiles(files);
+    } catch (err: any) {
+      setDriveError(err.message || "Could not retrieve files from Google Drive.");
+    } finally {
+      setIsFetchingDrive(false);
+    }
+  };
+
+  const handleImportDriveFile = async (driveFile: DriveFile) => {
+    if (!driveToken) return;
+    setDriveError(null);
+    setDriveSyncStatus(`Importing "${driveFile.name}"...`);
+    try {
+      const rawContent = await downloadDriveFile(driveToken, driveFile.id);
+      
+      // Determine file language from name
+      let lang: Language = "javascript";
+      if (driveFile.name.endsWith(".html") || driveFile.name.endsWith(".htm")) {
+        lang = "html";
+      } else if (driveFile.name.endsWith(".py")) {
+        lang = "python";
+      }
+
+      // Check if file already exists in local sandbox list
+      const existing = files.find(f => f.name.toLowerCase() === driveFile.name.toLowerCase());
+      if (existing) {
+        if (confirm(`A file named "${driveFile.name}" already exists in your local sandbox workspace.\n\nDo you want to OVERWRITE its content with the Google Drive version?`)) {
+          setFiles(prev => prev.map(f => f.id === existing.id ? { ...f, code: rawContent, language: lang } : f));
+          setImportedFilesMap(prev => ({ ...prev, [existing.id]: driveFile.id }));
+          setActiveFileId(existing.id);
+          setExplorerTab("local");
+          setDriveSyncStatus(`Successfully imported & merged "${driveFile.name}"`);
+          setTimeout(() => setDriveSyncStatus(null), 4000);
+        }
+        return;
+      }
+
+      // Create new file
+      const newId = `file-${Date.now()}`;
+      const newSnippet: FileSnippet = {
+        id: newId,
+        name: driveFile.name,
+        language: lang,
+        description: `Imported from Google Drive (${formatBytes(driveFile.size)})`,
+        code: rawContent
+      };
+
+      setFiles(prev => [...prev, newSnippet]);
+      setImportedFilesMap(prev => ({ ...prev, [newId]: driveFile.id }));
+      setActiveFileId(newId);
+      setExplorerTab("local");
+      setDriveSyncStatus(`Imported "${driveFile.name}" into local sandbox.`);
+      setTimeout(() => setDriveSyncStatus(null), 4000);
+    } catch (err: any) {
+      setDriveError(err.message || "Failed to import file.");
+    } finally {
+      setTimeout(() => setDriveSyncStatus(null), 4000);
+    }
+  };
+
+  const getMimeType = (fileName: string): string => {
+    if (fileName.endsWith(".html") || fileName.endsWith(".htm")) return "text/html";
+    if (fileName.endsWith(".py")) return "text/x-python";
+    if (fileName.endsWith(".js")) return "application/javascript";
+    if (fileName.endsWith(".ts")) return "application/typescript";
+    if (fileName.endsWith(".json")) return "application/json";
+    return "text/plain";
+  };
+
+  const handleSaveActiveToDrive = async () => {
+    if (!driveToken) {
+      alert("Please sign in to Google Drive first.");
+      return;
+    }
+    setDriveError(null);
+    const linkedId = importedFilesMap[activeFile.id];
+
+    if (linkedId) {
+      // Prompt/Confirm before overwrite (Crucial Turn Rule!)
+      const confirmed = confirm(`Are you sure you want to save changes and OVERWRITE "${activeFile.name}" on Google Drive?`);
+      if (!confirmed) return;
+
+      setDriveSyncStatus(`Updating "${activeFile.name}" on Google Drive...`);
+      try {
+        await uploadDriveFile(driveToken, activeFile.name, activeFile.code, getMimeType(activeFile.name), linkedId);
+        setDriveSyncStatus(`Successfully updated "${activeFile.name}" on Google Drive!`);
+        setTimeout(() => setDriveSyncStatus(null), 4000);
+        handleRefreshDriveFiles();
+      } catch (err: any) {
+        setDriveError(err.message || "Failed to update file on Google Drive.");
+      }
+    } else {
+      // Create new file
+      const driveFileName = prompt("Enter a name to save this file on Google Drive:", activeFile.name);
+      if (!driveFileName) return;
+
+      setDriveSyncStatus(`Uploading "${driveFileName}" to Google Drive...`);
+      try {
+        const result = await uploadDriveFile(driveToken, driveFileName, activeFile.code, getMimeType(driveFileName));
+        setImportedFilesMap(prev => ({ ...prev, [activeFile.id]: result.id }));
+        setDriveSyncStatus(`Successfully saved "${driveFileName}" to Google Drive!`);
+        setTimeout(() => setDriveSyncStatus(null), 4000);
+        handleRefreshDriveFiles();
+      } catch (err: any) {
+        setDriveError(err.message || "Failed to upload new file to Google Drive.");
+      }
+    }
+  };
+
+  const handleExportAllToDrive = async () => {
+    if (!driveToken) {
+      alert("Please sign in to Google Drive first.");
+      return;
+    }
+    setDriveError(null);
+    
+    const zipName = prompt("Enter a name for the project backup ZIP on Google Drive:", "sandbox-project-backup.zip");
+    if (!zipName) return;
+
+    setDriveSyncStatus("Packaging sandbox files as ZIP...");
+    setIsExportingDrive(true);
+
+    try {
+      const zip = new JSZip();
+      files.forEach(f => {
+        zip.file(f.name, f.code);
+      });
+      const contentBlob = await zip.generateAsync({ type: "blob" });
+
+      setDriveSyncStatus(`Uploading "${zipName}" ZIP to Google Drive...`);
+      await uploadDriveFile(driveToken, zipName, contentBlob, "application/zip");
+      setDriveSyncStatus(`Project backup "${zipName}" successfully uploaded to Google Drive!`);
+      setTimeout(() => setDriveSyncStatus(null), 5000);
+      handleRefreshDriveFiles();
+    } catch (err: any) {
+      setDriveError(err.message || "Failed to export ZIP to Google Drive.");
+    } finally {
+      setIsExportingDrive(false);
+    }
+  };
 
   // Onboarding Tutorial Pop-up States
   const [showTutorial, setShowTutorial] = useState<boolean>(() => {
@@ -452,6 +710,110 @@ What should we build first?`,
       setFiles(remaining);
       if (activeFileId === id) {
         setActiveFileId(remaining[0].id);
+      }
+    }
+  };
+
+  // Handle uploading and extracting a .zip archive
+  const handleZipFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (!file.name.endsWith(".zip") && file.type !== "application/zip") {
+      setZipError("Please select a valid .zip archive file.");
+      setTimeout(() => setZipError(null), 5000);
+      return;
+    }
+
+    setZipError(null);
+    setZipSuccessMessage(null);
+    setIsImportingZip(true);
+
+    try {
+      const zip = await JSZip.loadAsync(file);
+      const extractedFiles: FileSnippet[] = [];
+      const promises: Promise<void>[] = [];
+
+      zip.forEach((relativePath, fileEntry) => {
+        if (fileEntry.dir) return;
+        if (relativePath.includes("__MACOSX") || relativePath.startsWith(".") || relativePath.includes("/.")) return;
+
+        const fileName = relativePath.split("/").pop() || relativePath;
+        if (fileName.startsWith(".") || fileName === "Thumbs.db") return;
+
+        let lang: Language = "javascript";
+        if (fileName.endsWith(".html") || fileName.endsWith(".htm")) {
+          lang = "html";
+        } else if (fileName.endsWith(".py")) {
+          lang = "python";
+        } else if (fileName.endsWith(".js") || fileName.endsWith(".ts") || fileName.endsWith(".jsx") || fileName.endsWith(".tsx")) {
+          lang = "javascript";
+        } else {
+          const ext = fileName.split(".").pop()?.toLowerCase();
+          const allowedExts = ["js", "ts", "py", "html", "htm", "css", "json", "md", "txt", "jsx", "tsx"];
+          if (ext && !allowedExts.includes(ext)) {
+            return;
+          }
+          lang = "javascript";
+        }
+
+        const readPromise = fileEntry.async("string").then((codeContent) => {
+          extractedFiles.push({
+            id: `zip-file-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            name: fileName,
+            language: lang,
+            description: `Extracted from ${file.name}`,
+            code: codeContent
+          });
+        });
+        promises.push(readPromise);
+      });
+
+      await Promise.all(promises);
+
+      if (extractedFiles.length === 0) {
+        throw new Error("No readable source files (.html, .py, .js, etc.) found in the ZIP archive.");
+      }
+
+      const mergeChoice = confirm(
+        `Successfully loaded ZIP archive "${file.name}"!\n\n` +
+        `Found ${extractedFiles.length} file(s):\n` +
+        extractedFiles.map(f => `  • ${f.name} (${f.language})`).join("\n") +
+        `\n\n- Click OK to MERGE these files into your current workspace.\n` +
+        `- Click Cancel to REPLACE your current workspace entirely with these files.`
+      );
+
+      if (mergeChoice) {
+        setFiles(prev => {
+          const merged = [...prev];
+          extractedFiles.forEach(newFile => {
+            const idx = merged.findIndex(f => f.name.toLowerCase() === newFile.name.toLowerCase());
+            if (idx > -1) {
+              merged[idx] = newFile;
+            } else {
+              merged.push(newFile);
+            }
+          });
+          return merged;
+        });
+        setZipSuccessMessage(`Successfully merged ${extractedFiles.length} file(s) into your sandbox workspace!`);
+      } else {
+        setFiles(extractedFiles);
+        setZipSuccessMessage(`Successfully replaced workspace with ${extractedFiles.length} file(s) from ZIP!`);
+      }
+
+      if (extractedFiles.length > 0) {
+        setActiveFileId(extractedFiles[0].id);
+      }
+      setTimeout(() => setZipSuccessMessage(null), 5000);
+    } catch (err: any) {
+      console.error("ZIP import failed:", err);
+      setZipError(err.message || "Failed to extract code files from the selected archive.");
+      setTimeout(() => setZipError(null), 6000);
+    } finally {
+      setIsImportingZip(false);
+      if (event.target) {
+        event.target.value = "";
       }
     }
   };
@@ -1121,13 +1483,115 @@ print("=" * 40)`;
         </div>
       </header>
 
+      {/* 🔮 Sub-Header Navigation Bar (Tabs & Layout Switcher) */}
+      <div className="bg-slate-900 border-b border-slate-800/80 px-6 py-2.5 flex flex-wrap items-center justify-between gap-4 shadow-sm select-none">
+        
+        {/* Left Side: Tabs Switcher (Only active when layoutMode === "tabs") */}
+        <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800/80">
+          <button
+            type="button"
+            onClick={() => {
+              setLayoutMode("tabs");
+              setActiveMainTab("editor");
+            }}
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+              layoutMode === "tabs" && activeMainTab === "editor"
+                ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/15"
+                : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/45"
+            }`}
+          >
+            <Code size={13} />
+            <span>💻 Code Playground</span>
+          </button>
+          
+          <button
+            type="button"
+            onClick={() => {
+              setLayoutMode("tabs");
+              setActiveMainTab("chat");
+            }}
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 relative ${
+              layoutMode === "tabs" && activeMainTab === "chat"
+                ? "bg-purple-600 text-white shadow-md shadow-purple-600/15"
+                : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/45"
+            }`}
+          >
+            <MessageSquare size={13} />
+            <span>💬 AI Chat Companion</span>
+            {messages.length > 1 && (
+              <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-indigo-500 px-1 text-[9px] font-bold text-white border border-slate-900">
+                {messages.length - 1}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setLayoutMode("tabs");
+              setActiveMainTab("files");
+            }}
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+              layoutMode === "tabs" && activeMainTab === "files"
+                ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/15"
+                : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/45"
+            }`}
+          >
+            <FolderCode size={13} />
+            <span>📁 Explorer & Sync</span>
+          </button>
+        </div>
+
+        {/* Right Side: Layout Controller (Grid vs Tabbed view) */}
+        <div className="flex items-center gap-2 bg-slate-950 p-1 rounded-xl border border-slate-800/80">
+          <button
+            type="button"
+            onClick={() => setLayoutMode("tabs")}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+              layoutMode === "tabs"
+                ? "bg-slate-850 text-white border border-slate-700/60 shadow"
+                : "text-slate-500 hover:text-slate-300"
+            }`}
+            title="Focus on a single page tab cleanly"
+          >
+            <LayoutList size={13} />
+            <span className="hidden sm:inline">Clean Tab Focus</span>
+          </button>
+          
+          <button
+            type="button"
+            onClick={() => setLayoutMode("dashboard")}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+              layoutMode === "dashboard"
+                ? "bg-slate-850 text-white border border-slate-700/60 shadow"
+                : "text-slate-500 hover:text-slate-300"
+            }`}
+            title="Show all panels side-by-side (Ideal for widescreen displays)"
+          >
+            <LayoutGrid size={13} />
+            <span className="hidden sm:inline">Multi-Panel Grid</span>
+          </button>
+        </div>
+
+      </div>
+
       {/* 🔮 Dashboard Layout Grid */}
-      <main className="flex-1 grid grid-cols-1 lg:grid-cols-12 overflow-hidden h-[calc(100vh-73px)]">
+      <main className={`flex-1 grid overflow-hidden ${
+        layoutMode === "dashboard"
+          ? "grid-cols-1 lg:grid-cols-12 h-[calc(100vh-121px)]"
+          : "grid-cols-1 h-[calc(100vh-121px)]"
+      }`}>
         
         {/* ========================================================= */}
-        {/* PANEL 1: AI Chat Assistant (Grid: 4 cols) */}
+        {/* PANEL 1: AI Chat Assistant */}
         {/* ========================================================= */}
-        <section id="chat-assistant-panel" className="lg:col-span-4 border-r border-slate-800/70 flex flex-col bg-slate-900/45 overflow-hidden">
+        {(layoutMode === "dashboard" || activeMainTab === "chat") && (
+          <section 
+            id="chat-assistant-panel" 
+            className={`flex flex-col bg-slate-900/45 overflow-hidden h-full ${
+              layoutMode === "dashboard" ? "lg:col-span-4 border-r border-slate-800/70" : "col-span-1"
+            }`}
+          >
           {/* Chat Panel Title */}
           <div className="px-5 py-4 bg-slate-900 border-b border-slate-800/80 flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -1249,12 +1713,19 @@ print("=" * 40)`;
               <span className="font-mono">Gemini 3.5 Flash Model</span>
             </div>
           </form>
-        </section>
+          </section>
+        )}
 
         {/* ========================================================= */}
-        {/* PANEL 2: File Explorer & Code Editor (Grid: 4 cols) */}
+        {/* PANEL 2: File Explorer & Code Editor */}
         {/* ========================================================= */}
-        <section id="workspace-editor-panel" className="lg:col-span-4 flex flex-col border-r border-slate-800/70 bg-slate-950">
+        {(layoutMode === "dashboard" || activeMainTab === "files") && (
+          <section 
+            id="workspace-editor-panel" 
+            className={`flex flex-col bg-slate-950 h-full overflow-hidden ${
+              layoutMode === "dashboard" ? "lg:col-span-4 border-r border-slate-800/70" : "col-span-1"
+            }`}
+          >
           
           {/* File Explorer Header */}
           <div className="px-5 py-4 bg-slate-900 border-b border-slate-800/80 flex items-center justify-between">
@@ -1263,189 +1734,495 @@ print("=" * 40)`;
               <span className="text-sm font-bold text-white uppercase tracking-wider font-mono">Workspace Files</span>
             </div>
             
-            {/* Create new file action */}
-            <button
-              type="button"
-              onClick={() => setIsCreatingFile(!isCreatingFile)}
-              className="p-1.5 bg-slate-800 hover:bg-indigo-600/20 hover:text-indigo-400 text-slate-300 rounded-lg transition-colors border border-slate-700/50 flex items-center gap-1 text-xs font-bold"
-              title="Create custom file snippet"
-            >
-              <Plus size={14} />
-              <span>New</span>
-            </button>
-          </div>
-
-          {/* New File Inline Form Container */}
-          {isCreatingFile && (
-            <form onSubmit={handleCreateFileSubmit} className="p-4 bg-slate-900 border-b border-slate-800 space-y-3 animate-fade-in">
-              <div className="text-xs font-bold text-slate-400 font-mono">CREATE FILE SNIPPET</div>
-              
-              <div className="space-y-1.5">
-                <label className="text-[10px] text-slate-500 font-mono block">FILE NAME (e.g., test.js, run.py)</label>
-                <input
-                  type="text"
-                  value={newFileName}
-                  onChange={(e) => setNewFileName(e.target.value)}
-                  placeholder="e.g., utils.js"
-                  className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white font-mono focus:outline-none focus:border-indigo-500"
-                  required
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-[10px] text-slate-500 font-mono block mb-1">LANGUAGE</label>
-                  <select
-                    value={newFileLang}
-                    onChange={(e) => setNewFileLang(e.target.value as Language)}
-                    className="w-full px-2 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-300 font-mono focus:outline-none"
-                  >
-                    <option value="javascript">JavaScript</option>
-                    <option value="python">Python</option>
-                    <option value="html">HTML Layout</option>
-                  </select>
-                </div>
-                <div className="flex items-end gap-1">
-                  <button
-                    type="button"
-                    onClick={() => setIsCreatingFile(false)}
-                    className="flex-1 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded-lg text-xs font-bold"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="flex-1 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold"
-                  >
-                    Create
-                  </button>
-                </div>
-              </div>
-            </form>
-          )}
-
-          {/* File Lists shelf */}
-          <div className="p-3 border-b border-slate-800/40 bg-slate-900/30">
-            <input
-              type="text"
-              value={fileSearch}
-              onChange={(e) => setFileSearch(e.target.value)}
-              placeholder="Search files..."
-              className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-300 focus:outline-none focus:border-indigo-500 placeholder:text-slate-600"
-            />
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-2 space-y-1 bg-slate-950">
-            {filteredFiles.map((file) => {
-              const isSelected = file.id === activeFileId;
-              
-              return (
-                <div
-                  key={file.id}
-                  onClick={() => setActiveFileId(file.id)}
-                  className={`group flex items-center justify-between p-2.5 rounded-xl cursor-pointer transition-all ${
-                    isSelected 
-                      ? "bg-indigo-600/15 border border-indigo-500/20 text-white font-medium" 
-                      : "hover:bg-slate-900 text-slate-400 hover:text-slate-200 border border-transparent"
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    {/* File language badge color */}
-                    <div className={`p-1.5 rounded-lg ${
-                      file.language === "html" 
-                        ? "bg-purple-500/10 text-purple-400" 
-                        : file.language === "python"
-                          ? "bg-emerald-500/10 text-emerald-400"
-                          : "bg-yellow-500/10 text-yellow-400"
-                    }`}>
-                      <FileCode size={14} />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="text-xs font-semibold font-mono truncate">{file.name}</div>
-                      <div className="text-[9px] text-slate-500 truncate font-mono uppercase">{file.language} file</div>
-                    </div>
-                  </div>
-
-                  {/* Delete button (hidden on primary template files unless hover) */}
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDeleteFile(file.id, file.name);
-                      }}
-                      className="p-1 text-slate-500 hover:text-red-400 hover:bg-slate-800 rounded transition-colors"
-                      title="Delete file"
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-
-            {filteredFiles.length === 0 && (
-              <div className="p-6 text-center text-slate-600 text-xs">
-                No workspace files found matching filter.
-              </div>
-            )}
-          </div>
-
-          {/* Quick template seeds */}
-          <div className="p-4 bg-slate-900 border-t border-slate-800/80 space-y-2">
-            <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider font-mono">WORKSPACE TEMPLATES</div>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="flex items-center gap-1.5">
+              {/* ZIP import uploader (hidden input) */}
+              <input
+                type="file"
+                ref={zipInputRef}
+                onChange={handleZipFileChange}
+                accept=".zip"
+                className="hidden"
+              />
               <button
                 type="button"
-                onClick={() => loadTemplate("game")}
-                className="p-2 bg-slate-950 hover:bg-purple-500/10 border border-slate-800 hover:border-purple-500/30 transition-all rounded-xl text-left"
+                onClick={() => zipInputRef.current?.click()}
+                disabled={isImportingZip}
+                className="p-1.5 bg-slate-800 hover:bg-purple-600/20 hover:text-purple-400 text-slate-300 rounded-lg transition-colors border border-slate-700/50 flex items-center gap-1 text-xs font-bold cursor-pointer"
+                title="Import files from a ZIP archive"
               >
-                <div className="text-[11px] font-bold text-white">🎮 Tic-Tac-Toe</div>
-                <div className="text-[9px] text-slate-500 font-mono">HTML + Tailwind</div>
+                {isImportingZip ? (
+                  <span className="w-3.5 h-3.5 border border-white border-t-transparent animate-spin rounded-full"></span>
+                ) : (
+                  <FolderArchive size={14} />
+                )}
+                <span>Import ZIP</span>
               </button>
+
+              {/* Create new file action */}
               <button
                 type="button"
-                onClick={() => loadTemplate("timer")}
-                className="p-2 bg-slate-950 hover:bg-indigo-500/10 border border-slate-800 hover:border-indigo-500/30 transition-all rounded-xl text-left"
+                onClick={() => setIsCreatingFile(!isCreatingFile)}
+                className="p-1.5 bg-slate-800 hover:bg-indigo-600/20 hover:text-indigo-400 text-slate-300 rounded-lg transition-colors border border-slate-700/50 flex items-center gap-1 text-xs font-bold cursor-pointer"
+                title="Create custom file snippet"
               >
-                <div className="text-[11px] font-bold text-white">⏱️ Pomodoro</div>
-                <div className="text-[9px] text-slate-500 font-mono">HTML Layout</div>
-              </button>
-              <button
-                type="button"
-                onClick={() => loadTemplate("sort")}
-                className="p-2 bg-slate-950 hover:bg-emerald-500/10 border border-slate-800 hover:border-emerald-500/30 transition-all rounded-xl text-left"
-              >
-                <div className="text-[11px] font-bold text-white">🐍 Bubble Sort</div>
-                <div className="text-[9px] text-slate-500 font-mono">Python Script</div>
-              </button>
-              <button
-                type="button"
-                onClick={() => loadTemplate("matrix")}
-                className="p-2 bg-slate-950 hover:bg-yellow-500/10 border border-slate-800 hover:border-yellow-500/30 transition-all rounded-xl text-left"
-              >
-                <div className="text-[11px] font-bold text-white">⚡ Matrix Terminal</div>
-                <div className="text-[9px] text-slate-500 font-mono">JS Simulation</div>
+                <Plus size={14} />
+                <span>New</span>
               </button>
             </div>
           </div>
+
+          {/* Sub-header Tabs for Local vs Google Drive */}
+          <div className="flex border-b border-slate-800 bg-slate-900/60 text-[11px] font-mono select-none">
+            <button
+              type="button"
+              onClick={() => setExplorerTab("local")}
+              className={`flex-1 py-2.5 text-center font-bold border-b-2 transition-all ${
+                explorerTab === "local"
+                  ? "border-indigo-500 text-white bg-slate-950/20"
+                  : "border-transparent text-slate-500 hover:text-slate-300 hover:bg-slate-900/20"
+              }`}
+            >
+              💻 Local Sandbox ({files.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setExplorerTab("drive")}
+              className={`flex-1 py-2.5 text-center font-bold border-b-2 transition-all flex items-center justify-center gap-1.5 ${
+                explorerTab === "drive"
+                  ? "border-purple-500 text-white bg-slate-950/20"
+                  : "border-transparent text-slate-500 hover:text-slate-300 hover:bg-slate-900/20"
+              }`}
+            >
+              <Cloud size={12} className={explorerTab === "drive" ? "text-purple-400 animate-pulse" : ""} />
+              Google Drive Sync
+            </button>
+          </div>
+
+          {explorerTab === "local" ? (
+            <>
+              {/* ZIP status notifications */}
+              {zipSuccessMessage && (
+                <div className="p-3 bg-emerald-600/15 border-b border-emerald-500/20 text-xs text-emerald-400 font-medium font-mono animate-fade-in">
+                  ✅ {zipSuccessMessage}
+                </div>
+              )}
+              {zipError && (
+                <div className="p-3 bg-red-600/15 border-b border-red-500/20 text-xs text-red-400 font-medium font-mono animate-fade-in">
+                  ⚠️ {zipError}
+                </div>
+              )}
+              {/* New File Inline Form Container */}
+              {isCreatingFile && (
+                <form onSubmit={handleCreateFileSubmit} className="p-4 bg-slate-900 border-b border-slate-800 space-y-3 animate-fade-in">
+                  <div className="text-xs font-bold text-slate-400 font-mono">CREATE FILE SNIPPET</div>
+                  
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] text-slate-500 font-mono block">FILE NAME (e.g., test.js, run.py)</label>
+                    <input
+                      type="text"
+                      value={newFileName}
+                      onChange={(e) => setNewFileName(e.target.value)}
+                      placeholder="e.g., utils.js"
+                      className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white font-mono focus:outline-none focus:border-indigo-500"
+                      required
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] text-slate-500 font-mono block mb-1">LANGUAGE</label>
+                      <select
+                        value={newFileLang}
+                        onChange={(e) => setNewFileLang(e.target.value as Language)}
+                        className="w-full px-2 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-300 font-mono focus:outline-none"
+                      >
+                        <option value="javascript">JavaScript</option>
+                        <option value="python">Python</option>
+                        <option value="html">HTML Layout</option>
+                      </select>
+                    </div>
+                    <div className="flex items-end gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setIsCreatingFile(false)}
+                        className="flex-1 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded-lg text-xs font-bold"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        className="flex-1 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold"
+                      >
+                        Create
+                      </button>
+                    </div>
+                  </div>
+                </form>
+              )}
+
+              {/* File Lists shelf */}
+              <div className="p-3 border-b border-slate-800/40 bg-slate-900/30">
+                <input
+                  type="text"
+                  value={fileSearch}
+                  onChange={(e) => setFileSearch(e.target.value)}
+                  placeholder="Search files..."
+                  className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-300 focus:outline-none focus:border-indigo-500 placeholder:text-slate-600"
+                />
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-2 space-y-1 bg-slate-950">
+                {filteredFiles.map((file) => {
+                  const isSelected = file.id === activeFileId;
+                  const isLinked = !!importedFilesMap[file.id];
+                  
+                  return (
+                    <div
+                      key={file.id}
+                      onClick={() => setActiveFileId(file.id)}
+                      className={`group flex items-center justify-between p-2.5 rounded-xl cursor-pointer transition-all ${
+                        isSelected 
+                          ? "bg-indigo-600/15 border border-indigo-500/20 text-white font-medium" 
+                          : "hover:bg-slate-900 text-slate-400 hover:text-slate-200 border border-transparent"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        {/* File language badge color */}
+                        <div className={`p-1.5 rounded-lg ${
+                          file.language === "html" 
+                            ? "bg-purple-500/10 text-purple-400" 
+                            : file.language === "python"
+                              ? "bg-emerald-500/10 text-emerald-400"
+                              : "bg-yellow-500/10 text-yellow-400"
+                        }`}>
+                          <FileCode size={14} />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-semibold font-mono truncate">{file.name}</span>
+                            {isLinked && (
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" title="Synced with Google Drive"></span>
+                            )}
+                          </div>
+                          <div className="text-[9px] text-slate-500 truncate font-mono uppercase">{file.language} file</div>
+                        </div>
+                      </div>
+
+                      {/* Delete button */}
+                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteFile(file.id, file.name);
+                          }}
+                          className="p-1 text-slate-500 hover:text-red-400 hover:bg-slate-800 rounded transition-colors"
+                          title="Delete file"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {filteredFiles.length === 0 && (
+                  <div className="p-6 text-center text-slate-600 text-xs">
+                    No workspace files found matching filter.
+                  </div>
+                )}
+              </div>
+
+              {/* Quick template seeds */}
+              <div className="p-4 bg-slate-900 border-t border-slate-800/80 space-y-2">
+                <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider font-mono">WORKSPACE TEMPLATES</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => loadTemplate("game")}
+                    className="p-2 bg-slate-950 hover:bg-purple-500/10 border border-slate-800 hover:border-purple-500/30 transition-all rounded-xl text-left"
+                  >
+                    <div className="text-[11px] font-bold text-white">🎮 Tic-Tac-Toe</div>
+                    <div className="text-[9px] text-slate-500 font-mono">HTML + Tailwind</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => loadTemplate("timer")}
+                    className="p-2 bg-slate-950 hover:bg-indigo-500/10 border border-slate-800 hover:border-indigo-500/30 transition-all rounded-xl text-left"
+                  >
+                    <div className="text-[11px] font-bold text-white">⏱️ Pomodoro</div>
+                    <div className="text-[9px] text-slate-500 font-mono">HTML Layout</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => loadTemplate("sort")}
+                    className="p-2 bg-slate-950 hover:bg-emerald-500/10 border border-slate-800 hover:border-emerald-500/30 transition-all rounded-xl text-left"
+                  >
+                    <div className="text-[11px] font-bold text-white">🐍 Bubble Sort</div>
+                    <div className="text-[9px] text-slate-500 font-mono">Python Script</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => loadTemplate("matrix")}
+                    className="p-2 bg-slate-950 hover:bg-yellow-500/10 border border-slate-800 hover:border-yellow-500/30 transition-all rounded-xl text-left"
+                  >
+                    <div className="text-[11px] font-bold text-white">⚡ Matrix Terminal</div>
+                    <div className="text-[9px] text-slate-500 font-mono">JS Simulation</div>
+                  </button>
+                </div>
+              </div>
+            </>
+          ) : (
+            // ==========================================
+            // GOOGLE DRIVE SYNC PANEL
+            // ==========================================
+            <div className="flex-1 flex flex-col bg-slate-950 overflow-hidden">
+              {!driveUser ? (
+                /* Drive Not Logged In View */
+                <div className="flex-1 flex flex-col items-center justify-center p-6 text-center space-y-5 animate-fade-in">
+                  <div className="p-4 bg-purple-500/10 text-purple-400 rounded-full border border-purple-500/20 animate-pulse-slow">
+                    <Cloud size={32} />
+                  </div>
+                  <div className="space-y-1.5 max-w-xs">
+                    <h3 className="text-sm font-bold text-white font-mono uppercase tracking-wider">Connect Google Drive</h3>
+                    <p className="text-xs text-slate-500 leading-relaxed">
+                      Securely link your Google account to fetch files, backup workspace codes, or export files to Drive.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleDriveLogin}
+                    disabled={isFetchingDrive}
+                    className="px-5 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-extrabold rounded-xl transition-all shadow-lg shadow-purple-600/20 border border-purple-400/20 text-xs flex items-center gap-2 cursor-pointer"
+                  >
+                    {isFetchingDrive ? (
+                      <span className="w-4 h-4 border-2 border-white border-t-transparent animate-spin rounded-full"></span>
+                    ) : (
+                      <Cloud size={14} />
+                    )}
+                    <span>{isFetchingDrive ? "Connecting..." : "Sign in with Google"}</span>
+                  </button>
+                  {driveError && (
+                    <p className="text-[10px] text-red-400 bg-red-950/20 px-3 py-1.5 rounded-lg border border-red-900/30 max-w-xs truncate">
+                      ⚠️ {driveError}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                /* Drive Logged In Panel */
+                <div className="flex-1 flex flex-col overflow-hidden animate-fade-in">
+                  {/* Connected Profile Area */}
+                  <div className="p-3 bg-slate-900 border-b border-slate-800/80 flex items-center justify-between">
+                    <div className="flex items-center gap-2 min-w-0">
+                      {driveUser.photoURL ? (
+                        <img
+                          src={driveUser.photoURL}
+                          alt="Google Profile"
+                          referrerPolicy="no-referrer"
+                          className="w-7 h-7 rounded-full border border-purple-500/30"
+                        />
+                      ) : (
+                        <div className="w-7 h-7 rounded-full bg-purple-500/20 text-purple-300 font-bold flex items-center justify-center text-xs">
+                          {driveUser.email?.charAt(0).toUpperCase() || "G"}
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <div className="text-[11px] font-bold text-slate-200 truncate">{driveUser.displayName || "Google User"}</div>
+                        <div className="text-[9px] text-slate-500 font-mono truncate">{driveUser.email}</div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleDriveLogout}
+                      className="p-1.5 text-slate-500 hover:text-red-400 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+                      title="Disconnect Google Drive"
+                    >
+                      <LogOut size={14} />
+                    </button>
+                  </div>
+
+                  {/* Sync status alert notification */}
+                  {driveSyncStatus && (
+                    <div className="px-4 py-2 bg-indigo-500/10 border-b border-indigo-500/20 text-[10px] text-indigo-300 font-semibold flex items-center gap-2 animate-fade-in">
+                      <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-ping"></span>
+                      <span className="truncate">{driveSyncStatus}</span>
+                    </div>
+                  )}
+
+                  {/* Operational Sync Toolbar */}
+                  <div className="p-3 bg-slate-900/40 border-b border-slate-800/60 grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={handleSaveActiveToDrive}
+                      className="py-2 px-2.5 bg-purple-600/10 hover:bg-purple-600/20 border border-purple-500/20 hover:border-purple-500/40 transition-all rounded-xl text-left flex flex-col justify-between h-[68px] cursor-pointer"
+                    >
+                      <Upload size={16} className="text-purple-400" />
+                      <div>
+                        <div className="text-[10px] font-bold text-white">Save Current File</div>
+                        <div className="text-[8px] text-slate-400 truncate">Upload {activeFile.name}</div>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleExportAllToDrive}
+                      disabled={isExportingDrive}
+                      className="py-2 px-2.5 bg-indigo-600/10 hover:bg-indigo-600/20 border border-indigo-500/20 hover:border-indigo-500/40 transition-all rounded-xl text-left flex flex-col justify-between h-[68px] cursor-pointer"
+                    >
+                      <FolderOpen size={16} className="text-indigo-400" />
+                      <div>
+                        <div className="text-[10px] font-bold text-white">Export All (ZIP)</div>
+                        <div className="text-[8px] text-slate-400 truncate">
+                          {isExportingDrive ? "Zipping..." : "Package full sandbox"}
+                        </div>
+                      </div>
+                    </button>
+                  </div>
+
+                  {/* Google Drive Search Bar */}
+                  <div className="p-3 bg-slate-900/20 border-b border-slate-800/60 flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={driveSearch}
+                      onChange={(e) => setDriveSearch(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleRefreshDriveFiles()}
+                      placeholder="Search Drive files..."
+                      className="flex-1 px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-300 focus:outline-none focus:border-indigo-500 placeholder:text-slate-600"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleRefreshDriveFiles}
+                      className="p-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-400 hover:text-slate-200 rounded-lg transition-all cursor-pointer"
+                      title="Refresh file list"
+                    >
+                      <RefreshCw size={13} className={isFetchingDrive ? "animate-spin" : ""} />
+                    </button>
+                  </div>
+
+                  {/* Drive Files list */}
+                  <div className="flex-1 overflow-y-auto p-2 bg-slate-950 space-y-1">
+                    {driveError && (
+                      <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-[11px] text-red-300">
+                        ⚠️ Error: {driveError}
+                      </div>
+                    )}
+
+                    {isFetchingDrive && driveFiles.length === 0 ? (
+                      <div className="p-6 text-center text-slate-500 text-xs flex flex-col items-center gap-2 font-mono">
+                        <div className="w-4 h-4 border-2 border-purple-500 border-t-transparent animate-spin rounded-full"></div>
+                        <span>Scanning Google Drive metadata...</span>
+                      </div>
+                    ) : driveFiles.length === 0 ? (
+                      <div className="p-8 text-center text-slate-600 text-xs font-mono space-y-1">
+                        <div>No files found on Google Drive.</div>
+                        <p className="text-[10px] text-slate-700">Click Save Current File to upload your first workspace snippet!</p>
+                      </div>
+                    ) : (
+                      driveFiles.map((driveFile) => {
+                        const isImported = Object.values(importedFilesMap).includes(driveFile.id);
+                        
+                        return (
+                          <div
+                            key={driveFile.id}
+                            className="group flex items-center justify-between p-2.5 rounded-xl border border-slate-900 hover:border-slate-800 hover:bg-slate-900/40 transition-all"
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <div className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-purple-400">
+                                <FileCode size={14} />
+                              </div>
+                              <div className="min-w-0">
+                                <div className="text-xs font-semibold font-mono text-slate-200 truncate flex items-center gap-1.5">
+                                  <span className="truncate">{driveFile.name}</span>
+                                  {isImported && (
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" title="Imported in workspace"></span>
+                                  )}
+                                </div>
+                                <div className="text-[9px] text-slate-500 font-mono">
+                                  {formatBytes(driveFile.size)} • {new Date(driveFile.modifiedTime).toLocaleDateString()}
+                                </div>
+                              </div>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => handleImportDriveFile(driveFile)}
+                              className="px-2 py-1 bg-slate-900 group-hover:bg-purple-600/20 hover:!bg-purple-600 hover:!text-white border border-slate-800 hover:border-purple-500/30 text-slate-400 hover:text-slate-200 text-[10px] font-bold rounded-lg transition-all cursor-pointer"
+                            >
+                              Import
+                            </button>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </section>
+        )}
 
         {/* ========================================================= */}
-        {/* PANEL 3: Dual Execution Panel & Canvas Runner (Grid: 4 cols) */}
+        {/* PANEL 3: Dual Execution Panel & Canvas Runner */}
         {/* ========================================================= */}
-        <section id="interactive-editor-preview-panel" className="lg:col-span-4 flex flex-col bg-slate-900 overflow-hidden">
+        {(layoutMode === "dashboard" || activeMainTab === "editor") && (
+          <section 
+            id="interactive-editor-preview-panel" 
+            className={`flex flex-col bg-slate-900 overflow-hidden h-full ${
+              layoutMode === "dashboard" ? "lg:col-span-4" : "col-span-1"
+            }`}
+          >
           
           {/* Active file Code edit pane & Live results panel */}
           <div className="flex-1 flex flex-col min-h-[50%] border-b border-slate-800/80">
-            {/* Editor tab name header */}
-            <div className="px-4 py-2 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
-                <span className="text-xs font-mono text-slate-300 font-bold">{activeFile.name}</span>
-                <span className="text-[9px] text-slate-500 font-mono uppercase">({activeFile.language} editor)</span>
+            {/* Editor file tabs header */}
+            <div className="bg-slate-950 border-b border-slate-800 flex items-center justify-between overflow-hidden">
+              {/* Horizontal scrollable row of tabs */}
+              <div className="flex-1 flex items-center overflow-x-auto scrollbar-none border-r border-slate-800/80">
+                {files.map((f) => {
+                  const isActive = f.id === activeFileId;
+                  return (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => setActiveFileId(f.id)}
+                      className={`flex items-center gap-2 px-4 py-3 text-xs font-mono border-r border-slate-800/50 transition-all select-none ${
+                        isActive
+                          ? "bg-slate-900 text-white font-bold border-b-2 border-indigo-500"
+                          : "text-slate-500 hover:text-slate-300 bg-slate-950/40 hover:bg-slate-900/10"
+                      }`}
+                    >
+                      <div className={`p-0.5 rounded-sm ${
+                        f.language === "html" 
+                          ? "text-purple-400" 
+                          : f.language === "python"
+                            ? "text-emerald-400"
+                            : "text-yellow-400"
+                      }`}>
+                        <FileCode size={12} />
+                      </div>
+                      <span className="truncate max-w-[120px]">{f.name}</span>
+                    </button>
+                  );
+                })}
+                
+                {/* Quick Add file tab */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsCreatingFile(true);
+                    if (layoutMode === "tabs") {
+                      setActiveMainTab("files");
+                    }
+                  }}
+                  className="p-3 text-slate-500 hover:text-indigo-400 hover:bg-slate-900/30 transition-all flex items-center justify-center border-r border-slate-800/50"
+                  title="Create new file snippet"
+                >
+                  <Plus size={14} />
+                </button>
               </div>
-              <div className="flex items-center gap-3">
+
+              {/* Action Buttons on the right of the tab row */}
+              <div className="px-4 py-2 flex items-center gap-3">
                 {/* Save status */}
                 <div className="flex items-center gap-1 text-[10px] text-slate-500 font-mono">
                   {saveStatus === "saving" && <span className="text-indigo-400 animate-pulse">saving...</span>}
@@ -1620,7 +2397,8 @@ print("=" * 40)`;
               </div>
             )}
           </div>
-        </section>
+          </section>
+        )}
 
       </main>
 
