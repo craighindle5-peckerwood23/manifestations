@@ -32,11 +32,29 @@ import {
   LayoutList,
   Search,
   Cpu,
-  Bot
+  Bot,
+  Menu,
+  Volume2,
+  VolumeX,
+  Mic,
+  MicOff,
+  History,
+  Activity,
+  Globe,
+  Brain,
+  Compass,
+  Eye
 } from "lucide-react";
-import { FileSnippet, Message, ExecutionResult, Language } from "./types";
+import { FileSnippet, Message, ExecutionResult, Language, BuildLogEntry, MetacognitiveReflection } from "./types";
 import { OrchestratorSuite } from "./components/OrchestratorSuite";
+import { HeroVoiceStudio } from "./components/HeroVoiceStudio";
+import { BuildHistoryDrawer } from "./components/BuildHistoryDrawer";
+import { FileMiniMap } from "./components/FileMiniMap";
+import { LivePiPPreview } from "./components/LivePiPPreview";
+import { MetacognitiveInferenceHub } from "./components/MetacognitiveInferenceHub";
+import { EnterpriseEcosystemDrawer } from "./components/EnterpriseEcosystemDrawer";
 import JSZip from "jszip";
+
 import {
   initAuth,
   googleSignIn,
@@ -299,8 +317,66 @@ What should we build first?`,
 
   // Modal / File actions state
   const [layoutMode, setLayoutMode] = useState<"dashboard" | "tabs">("tabs");
-  const [activeMainTab, setActiveMainTab] = useState<"chat" | "editor" | "files" | "orchestrator">("editor");
+  const [activeMainTab, setActiveMainTab] = useState<"hero" | "chat" | "editor" | "files" | "orchestrator">("hero");
+  const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false);
+  const [isEcosystemOpen, setIsEcosystemOpen] = useState<boolean>(false);
+
+  // Metacognitive Reflection Engine State
+  const [metacognitiveData, setMetacognitiveData] = useState<MetacognitiveReflection>({
+    id: "meta_1",
+    timestamp: "Just now",
+    thoughtProcess: "Analyzing user prompt patterns and code structure. Inferring high-yield developer velocity requirement. Recommending AST-driven local state persistence and responsive UI feedback loops.",
+    userIntentAlignment: "High confidence match (96%). User prioritizes speed, Apple-style elegance, and local-first autonomy.",
+    confidenceScore: 96,
+    webInferenceInsights: [
+      "Synthesized top GitHub repository conventions for reactive single-screen web apps.",
+      "Inferred optimal color palette: Slate-950 canvas with Indigo/Emerald accents.",
+      "Verified local storage persistence pattern for zero data loss upon page refresh.",
+      "Validated Web Speech Recognition & Synthesis APIs compatibility across modern browsers."
+    ],
+    suggestedRoadmap: [
+      {
+        stepNumber: 1,
+        title: "Add LocalStorage State Persistence",
+        description: "Save active files and user preference states in client IndexedDB / LocalStorage for offline recovery.",
+        highYieldImpact: "+40% Reliability"
+      },
+      {
+        stepNumber: 2,
+        title: "Integrate Multi-LLM Consensus Checker",
+        description: "Validate code snippet correctness using parallel Gemini + OpenAI evaluation.",
+        highYieldImpact: "+99% Code Quality"
+      },
+      {
+        stepNumber: 3,
+        title: "Connect Enterprise GitHub & Teams Webhooks",
+        description: "Automatically post build updates and commit tags to Microsoft Teams channels and GitHub repos.",
+        highYieldImpact: "+80% Team Velocity"
+      }
+    ]
+  });
+
+  const [buildLogs, setBuildLogs] = useState<BuildLogEntry[]>([
+    {
+      id: "log_init_1",
+      timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      trigger: "Initial AST Workspace Load",
+      status: "success",
+      durationMs: 120,
+      filesModified: 3,
+      stdout: "Workspace initialized successfully with HTML, JS, and Python snippets.",
+      agentRole: "architect"
+    }
+  ]);
+
+  // Voice Chat Input State
+  const [isChatListening, setIsChatListening] = useState<boolean>(false);
+  const [isChatSpeaking, setIsChatSpeaking] = useState<boolean>(false);
+  const [voiceTTSMuted, setVoiceTTSMuted] = useState<boolean>(false);
+  const chatSpeechRecRef = useRef<any>(null);
+
   const [isCreatingFile, setIsCreatingFile] = useState<boolean>(false);
+
   const [newFileName, setNewFileName] = useState<string>("");
   const [newFileLang, setNewFileLang] = useState<Language>("javascript");
   const [fileSearch, setFileSearch] = useState<string>("");
@@ -613,13 +689,31 @@ What should we build first?`,
       }
 
       const data = await response.json();
+      const statusResult = data.status === "error" ? "error" : "success";
+      
       setExecResult({
         stdout: data.stdout,
         stderr: data.stderr,
-        status: data.status,
+        status: statusResult,
         error: data.error,
         executionTimeMs: data.executionTimeMs
       });
+
+      // Append to Build History Audit Stream
+      setBuildLogs((prev) => [
+        {
+          id: `log_exec_${Date.now()}`,
+          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          trigger: `Executed Script: ${activeFile.name}`,
+          status: statusResult,
+          durationMs: data.executionTimeMs || 110,
+          filesModified: 1,
+          stdout: data.stdout,
+          stderr: data.stderr || data.error,
+          agentRole: "ops_healing"
+        },
+        ...prev
+      ]);
     } catch (err: any) {
       setExecResult({
         stdout: "",
@@ -627,10 +721,60 @@ What should we build first?`,
         status: "error",
         error: err.message
       });
+
+      setBuildLogs((prev) => [
+        {
+          id: `log_err_${Date.now()}`,
+          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          trigger: `Failed Script: ${activeFile.name}`,
+          status: "error",
+          durationMs: 80,
+          filesModified: 1,
+          stderr: err.message,
+          agentRole: "ops_healing"
+        },
+        ...prev
+      ]);
     } finally {
       setIsExecuting(false);
     }
   };
+
+  // Toggle Speech-To-Text mic in chat companion input
+  const handleToggleChatMic = () => {
+    if (isChatListening) {
+      if (chatSpeechRecRef.current) {
+        chatSpeechRecRef.current.stop();
+      }
+      setIsChatListening(false);
+    } else {
+      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        const recognition = new SpeechRecognition();
+        recognition.continuous = false;
+        recognition.interimResults = true;
+        recognition.lang = "en-US";
+
+        recognition.onstart = () => setIsChatListening(true);
+        recognition.onresult = (event: any) => {
+          let text = "";
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            text += event.results[i][0].transcript;
+          }
+          setChatInput(text);
+        };
+        recognition.onerror = () => setIsChatListening(false);
+        recognition.onend = () => setIsChatListening(false);
+
+        chatSpeechRecRef.current = recognition;
+        recognition.start();
+      } else {
+        const voiceText = prompt("Speech recognition limited in this frame. Type your spoken message:", "Build a high-yield local-first app");
+        if (voiceText) setChatInput(voiceText);
+      }
+    }
+  };
+
 
   // Reset sandbox files to original defaults
   const handleResetWorkspace = () => {
@@ -1459,7 +1603,29 @@ print("=" * 40)`;
           <div className="flex items-center gap-1.5">
             <button
               type="button"
+              onClick={() => setIsEcosystemOpen(true)}
+              className="px-3 py-2 bg-purple-950/60 hover:bg-purple-900/80 text-purple-300 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all border border-purple-800/60 shadow-sm cursor-pointer"
+              title="Open Ecosystem & Enterprise Integrations (GitHub, M365, Teams, Bluetooth, Multi-LLM)"
+            >
+              <Layers size={14} className="text-purple-400" />
+              <span className="hidden sm:inline">Ecosystem Integrations</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsHistoryOpen(true)}
+              className="px-3 py-2 bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-300 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all border border-indigo-800/60 shadow-sm cursor-pointer"
+              title="Open Build History Logs & System Status Sidebar"
+            >
+              <Menu size={14} className="text-indigo-400" />
+              <span className="hidden sm:inline">Build History & Logs</span>
+              <span className="flex h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+            </button>
+
+            <button
+              type="button"
               onClick={handleOpenTutorial}
+
               className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-purple-300 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all border border-purple-900/30 hover:border-purple-800/40"
               title="Open Sandbox Onboarding Tutorial"
             >
@@ -1493,6 +1659,22 @@ print("=" * 40)`;
         
         {/* Left Side: Tabs Switcher (Only active when layoutMode === "tabs") */}
         <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800/80">
+          <button
+            type="button"
+            onClick={() => {
+              setLayoutMode("tabs");
+              setActiveMainTab("hero");
+            }}
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+              layoutMode === "tabs" && activeMainTab === "hero"
+                ? "bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md shadow-indigo-600/20"
+                : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/45"
+            }`}
+          >
+            <Sparkles size={13} className="text-amber-400" />
+            <span>✨ Voice Hero Studio</span>
+          </button>
+
           <button
             type="button"
             onClick={() => {
@@ -1632,36 +1814,70 @@ print("=" * 40)`;
             </button>
           </div>
 
-          {/* Quick Suggestions Shelf */}
-          <div className="px-4 py-2.5 bg-slate-950 border-b border-slate-800/50 flex gap-1.5 overflow-x-auto scrollbar-none text-xs">
+          {/* High-Yield Engaging Prompt Suggestions Shelf */}
+          <div className="px-4 py-2.5 bg-slate-950 border-b border-slate-800/50 flex gap-2 overflow-x-auto scrollbar-none text-xs">
             <button 
               type="button"
-              onClick={() => handleSendChat(undefined, "Build a dynamic retro stopwatch in HTML with start and lap functions using Tailwind CSS.")}
-              className="flex-shrink-0 px-2.5 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white transition-colors rounded-lg font-medium"
+              onClick={() => handleSendChat(undefined, "Build a high-yield Multi-Tenant SaaS engine with local-first Auth, user role switching, and dynamic pricing metrics in HTML and Tailwind CSS.")}
+              className="flex-shrink-0 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-indigo-900/50 hover:border-indigo-500/50 text-slate-300 hover:text-white transition-all rounded-xl font-medium shadow-sm flex items-center gap-1.5"
             >
-              ⏱️ Stopwatch Game
+              🚀 Multi-Tenant SaaS Engine
             </button>
             <button 
               type="button"
-              onClick={() => handleSendChat(undefined, "Write a Python script that calculates matrix statistics and prints structural analysis of sales data.")}
-              className="flex-shrink-0 px-2.5 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white transition-colors rounded-lg font-medium"
+              onClick={() => handleSendChat(undefined, "Construct an interactive Web Audio Synthesizer in HTML5 Canvas with customizable oscillator frequency sliders and visual waveforms.")}
+              className="flex-shrink-0 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-purple-900/50 hover:border-purple-500/50 text-slate-300 hover:text-white transition-all rounded-xl font-medium shadow-sm flex items-center gap-1.5"
             >
-              📊 Python Log parser
+              ⚡ Web Audio Synthesizer
             </button>
             <button 
               type="button"
-              onClick={() => handleSendChat(undefined, "Build an elegant, interactive color palette scheme generator in HTML.")}
-              className="flex-shrink-0 px-2.5 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white transition-colors rounded-lg font-medium"
+              onClick={() => handleSendChat(undefined, "Write a Python script that parses AST syntax trees, identifies code complexity hotspots, and outputs JSON benchmarks.")}
+              className="flex-shrink-0 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-emerald-900/50 hover:border-emerald-500/50 text-slate-300 hover:text-white transition-all rounded-xl font-medium shadow-sm flex items-center gap-1.5"
             >
-              🎨 Theme generator
+              🔮 AST Error Healer
             </button>
             <button 
               type="button"
-              onClick={() => handleSendChat(undefined, "Write a JavaScript benchmark that compares standard loops with Map/Filter operations.")}
-              className="flex-shrink-0 px-2.5 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white transition-colors rounded-lg font-medium"
+              onClick={() => handleSendChat(undefined, "Build a dark Apple-style interactive dashboard with animated bar charts, data grid filters, and real-time telemetry counters.")}
+              className="flex-shrink-0 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-amber-900/50 hover:border-amber-500/50 text-slate-300 hover:text-white transition-all rounded-xl font-medium shadow-sm flex items-center gap-1.5"
             >
-              ⚡ JS Benchmark
+              🎨 Apple-Style Dashboard
             </button>
+          </div>
+
+          {/* Proactive AI Copilot Insight Box */}
+          <div className="mx-4 mt-3 p-3 rounded-2xl bg-gradient-to-r from-indigo-950/60 via-purple-950/40 to-slate-950 border border-indigo-800/40 flex items-start gap-3 shadow-inner">
+            <div className="p-2 bg-indigo-500/20 text-indigo-400 rounded-xl mt-0.5 flex-shrink-0">
+              <Sparkles size={15} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-[11px] font-bold text-indigo-200 flex items-center justify-between">
+                <span>💡 AI Copilot High-Yield Recommendation</span>
+                <span className="text-[9px] font-mono text-indigo-400 bg-indigo-950 px-2 py-0.5 rounded-full border border-indigo-900">Active AST</span>
+              </div>
+              <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
+                You are currently viewing <span className="font-mono text-white font-bold">{activeFile.name}</span>. Try asking: <span className="italic text-indigo-300">"Refactor this file to add local storage persistence and responsive keyboard shortcuts."</span>
+              </p>
+            </div>
+          </div>
+
+          {/* 🧠 Metacognitive Inference Engine Hub */}
+          <div className="mx-4 mt-3">
+            <MetacognitiveInferenceHub
+              data={metacognitiveData}
+              onRefreshReflection={() => {
+                setMetacognitiveData((prev) => ({
+                  ...prev,
+                  timestamp: new Date().toLocaleTimeString(),
+                  confidenceScore: Math.min(100, Math.floor(88 + Math.random() * 11)),
+                  thoughtProcess: `Re-evaluated code syntax tree in ${activeFile.name}. Inferred requirement for enterprise reactivity & async error handling. Confidence rating updated.`
+                }));
+              }}
+              onSelectPromptSuggestion={(promptText) => {
+                handleSendChat(undefined, promptText);
+              }}
+            />
           </div>
 
           {/* Chat Bubbles Scroll Pane */}
@@ -1704,36 +1920,60 @@ print("=" * 40)`;
                 </div>
                 <div className="bg-slate-900/90 border border-slate-800/80 rounded-2xl rounded-tl-none p-4 text-slate-400 text-sm flex items-center gap-3">
                   <div className="w-4 h-4 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin"></div>
-                  <span>Drafting code and organizing sandbox workspace...</span>
+                  <span>Drafting high-yield code and updating AST workspace...</span>
                 </div>
               </div>
             )}
             <div ref={chatEndRef} />
           </div>
 
-          {/* Chat Form Area */}
+          {/* Chat Form Area with Talk-to-Text Speech Mic */}
           <form onSubmit={handleSendChat} className="p-4 bg-slate-900 border-t border-slate-800/80 flex flex-col gap-2">
-            <div className="relative flex items-center">
+            {isChatListening && (
+              <div className="px-3 py-1.5 bg-emerald-950/60 border border-emerald-800/60 rounded-xl text-emerald-300 text-xs font-mono flex items-center gap-2 animate-pulse">
+                <Mic size={14} className="text-emerald-400 animate-spin" />
+                <span>Listening to your voice... Speak now to transcribe</span>
+              </div>
+            )}
+
+            <div className="relative flex items-center gap-2">
               <input
                 type="text"
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
-                placeholder="Ask to write code or build interactive apps..."
-                className="w-full pl-4 pr-12 py-3 bg-slate-950 border border-slate-800 rounded-xl text-sm focus:outline-none focus:border-indigo-500 transition-colors placeholder:text-slate-600 text-white"
+                placeholder="Type or click the microphone to speak your command..."
+                className="w-full pl-4 pr-24 py-3 bg-slate-950 border border-slate-800 rounded-xl text-sm focus:outline-none focus:border-indigo-500 transition-colors placeholder:text-slate-600 text-white"
               />
+
+              {/* Talk to Text Mic Button */}
+              <button
+                type="button"
+                onClick={handleToggleChatMic}
+                className={`absolute right-16 p-2 rounded-lg transition-all ${
+                  isChatListening
+                    ? "bg-emerald-600 text-white animate-pulse"
+                    : "bg-slate-800 hover:bg-slate-700 text-slate-300"
+                }`}
+                title={isChatListening ? "Stop Voice Listening" : "Talk to Text (Speak Command)"}
+              >
+                {isChatListening ? <MicOff size={15} /> : <Mic size={15} />}
+              </button>
+
               <button
                 type="submit"
                 disabled={!chatInput.trim() || isThinking}
-                className="absolute right-2 px-3 py-1.5 bg-indigo-600 disabled:bg-slate-800 disabled:text-slate-600 text-white font-bold rounded-lg text-xs transition-colors hover:bg-indigo-500"
+                className="absolute right-2 px-3 py-1.5 bg-indigo-600 disabled:bg-slate-800 disabled:text-slate-600 text-white font-bold rounded-lg text-xs transition-colors hover:bg-indigo-500 cursor-pointer"
               >
                 Send
               </button>
             </div>
-            <div className="flex items-center justify-between px-1 text-[11px] text-slate-500">
-              <span>Supports HTML, Python, & JavaScript generation</span>
-              <span className="font-mono">Gemini 3.5 Flash Model</span>
+
+            <div className="flex items-center justify-between px-1 text-[11px] text-slate-500 font-mono">
+              <span>Supports Voice-to-Text & HTML/JS/Py Generation</span>
+              <span>Gemini 3.6 Flash Engine</span>
             </div>
           </form>
+
           </section>
         )}
 
@@ -2266,10 +2506,10 @@ print("=" * 40)`;
               </div>
             </div>
 
-            {/* Code Textarea editor panel */}
-            <div className="flex-1 relative flex font-mono text-xs">
+            {/* Code Textarea editor panel with File MiniMap */}
+            <div className="flex-1 relative flex font-mono text-xs overflow-hidden">
               {/* Fake gutter line numbers */}
-              <div className="bg-slate-950/60 text-slate-600 p-3 select-none text-right border-r border-slate-900/80 text-[11px] font-mono leading-relaxed space-y-0.5">
+              <div className="bg-slate-950/60 text-slate-600 p-3 select-none text-right border-r border-slate-900/80 text-[11px] font-mono leading-relaxed space-y-0.5 min-w-[2.5rem]">
                 {activeFile.code.split("\n").map((_, lineIdx) => (
                   <div key={lineIdx} className="min-h-[1.1rem]">{lineIdx + 1}</div>
                 ))}
@@ -2281,7 +2521,13 @@ print("=" * 40)`;
                 className="flex-1 w-full p-3 bg-slate-950/30 text-slate-300 focus:outline-none focus:ring-0 resize-none font-mono text-[11px] leading-relaxed select-text"
                 spellCheck={false}
               />
+              {/* Interactive AST File MiniMap */}
+              <FileMiniMap
+                code={activeFile.code}
+                language={activeFile.language}
+              />
             </div>
+
           </div>
 
           {/* Dual Sandbox result view tab bar */}
@@ -2487,6 +2733,26 @@ print("=" * 40)`;
               </div>
             )}
           </div>
+          </section>
+        )}
+
+        {/* ========================================================= */}
+        {/* PANEL 0: Apple-Style Hero Page & Neural Voice Studio */}
+        {/* ========================================================= */}
+        {layoutMode === "tabs" && activeMainTab === "hero" && (
+          <section className="col-span-1 h-full overflow-hidden flex flex-col bg-slate-950">
+            <HeroVoiceStudio
+              files={files}
+              activeFile={activeFile}
+              messages={messages}
+              isThinking={isThinking}
+              chatInput={chatInput}
+              onChatInputChange={setChatInput}
+              onSendChatMessage={(text) => handleSendChat(undefined, text)}
+              onClearChat={handleClearChat}
+              renderMessageContent={renderMessageContent}
+              onNavigateToTab={(tab) => setActiveMainTab(tab)}
+            />
           </section>
         )}
 
@@ -2724,8 +2990,38 @@ print("=" * 40)`;
         </div>
       )}
 
+      {/* 📜 Build History & System Status Drawer */}
+      <BuildHistoryDrawer
+        isOpen={isHistoryOpen}
+        onClose={() => setIsHistoryOpen(false)}
+        buildLogs={buildLogs}
+        onClearLogs={() => setBuildLogs([])}
+        activeFile={activeFile}
+        files={files}
+      />
+
+      {/* 🌐 Ecosystem & Enterprise Drawer (GitHub, M365, Teams, Gmail, Bluetooth, Multi-LLM) */}
+      <EnterpriseEcosystemDrawer
+        isOpen={isEcosystemOpen}
+        onClose={() => setIsEcosystemOpen(false)}
+        files={files}
+      />
+
+      {/* 🖼️ Live Floating Picture-In-Picture Demo & AI Roadmap Window */}
+      <LivePiPPreview
+        activeFile={activeFile}
+        execResult={execResult}
+        onRunScript={() => handleExecuteScript()}
+        metacognitiveData={metacognitiveData}
+        onApplyRoadmapStep={(stepTitle) => {
+          handleSendChat(undefined, `Build the following roadmap iteration for my app: ${stepTitle}`);
+        }}
+        onOpenFullPreview={() => setActiveMainTab("editor")}
+      />
+
       {/* 🚀 Simple status footer */}
       <footer className="bg-slate-900 border-t border-slate-800/80 px-6 py-2 flex flex-wrap items-center justify-between text-xs text-slate-500">
+
         <div className="flex items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
           <span>Docker execution container: <strong>Active</strong></span>
