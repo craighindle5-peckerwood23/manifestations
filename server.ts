@@ -119,7 +119,120 @@ app.post("/api/execute", (req, res) => {
   });
 });
 
+// Multi-Agent Orchestrator & Self-Healing Patch API
+app.post("/api/agent/orchestrate", async (req, res) => {
+  try {
+    const { agentType, prompt, codeContext, skillsContext } = req.body;
+    const client = getGeminiClient();
+
+    let agentSystemPrompt = `You are a specialized AI Agent in a Repo-Native Cross-Generative Multi-Agent Architecture.`;
+    
+    if (agentType === "architect") {
+      agentSystemPrompt += `\nROLE: Architect Agent.
+Your job is to analyze the requirements and design standard stack decisions, prompt-driven schemas, data models (Prisma/Drizzle/SQL), RLS constraints, and API architecture.
+Output clean, idiomatic TypeScript interfaces, DB schemas, and clear architectural specs.`;
+    } else if (agentType === "frontend") {
+      agentSystemPrompt += `\nROLE: Frontend Agent.
+Your job is to build accessible, elegant UI components, state management loops, and visual design tokens using React + Tailwind CSS.
+Output complete, production-ready React component snippets with standard imports.`;
+    } else if (agentType === "backend") {
+      agentSystemPrompt += `\nROLE: Backend Agent.
+Your job is to generate API routes, Express/Node middleware, database queries, and secure authentication / per-user isolation logic.
+Output robust, clean backend TypeScript code.`;
+    } else if (agentType === "ops_healing") {
+      agentSystemPrompt += `\nROLE: Ops & Self-Healing Agent.
+Your job is to analyze failing test results, stack traces, and code files to automatically diagnose the root cause, output unit/integration tests, and propose an AST code patch that fixes the error.
+Format output with:
+1. Diagnosis & Root Cause
+2. Generated Test Case
+3. Proposed Self-Healing Code Patch`;
+    }
+
+    if (skillsContext && Array.isArray(skillsContext) && skillsContext.length > 0) {
+      agentSystemPrompt += `\n\nCUSTOM TRAINED SKILLS & APIS:\n` + skillsContext.map((s: any) => `- ${s.name}: ${s.description}\nAPI Spec: ${s.spec}`).join("\n");
+    }
+
+    const contents = [
+      {
+        role: "user",
+        parts: [
+          {
+            text: `[Context Code]:\n${codeContext || "None"}\n\n[Task Request]:\n${prompt}`
+          }
+        ]
+      }
+    ];
+
+    const response = await client.models.generateContent({
+      model: "gemini-3.6-flash",
+      contents,
+      config: {
+        systemInstruction: agentSystemPrompt,
+        temperature: 0.5,
+      },
+    });
+
+    res.json({
+      agentType,
+      output: response.text || "No response generated.",
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    console.error("Multi-Agent orchestration error:", error);
+    res.status(500).json({ error: error.message || "Multi-agent processing failed." });
+  }
+});
+
 // Chat with Gemini API (Server-side to hide keys)
+async function generateContentWithRetry(client: GoogleGenAI, geminiContents: any[]) {
+  const modelsToTry = ["gemini-3.6-flash", "gemini-flash-latest", "gemini-3.1-flash-lite"];
+  let lastError: any = null;
+
+  for (const model of modelsToTry) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        if (attempt > 0) {
+          const delayMs = Math.pow(2, attempt - 1) * 1000;
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+
+        const response = await client.models.generateContent({
+          model,
+          contents: geminiContents,
+          config: {
+            systemInstruction,
+            temperature: 0.7,
+          },
+        });
+
+        if (response && response.text) {
+          return response;
+        }
+      } catch (err: any) {
+        lastError = err;
+        const errMsg = (err?.message || "").toLowerCase();
+        const isTransient =
+          errMsg.includes("503") ||
+          errMsg.includes("high demand") ||
+          errMsg.includes("unavailable") ||
+          errMsg.includes("429") ||
+          errMsg.includes("resource_exhausted") ||
+          errMsg.includes("quota") ||
+          errMsg.includes("overloaded");
+
+        console.warn(`[Gemini API] Model ${model} attempt ${attempt + 1} failed: ${err?.message || err}`);
+
+        if (!isTransient) {
+          // Non-transient error, break attempt loop to try next model or throw
+          break;
+        }
+      }
+    }
+  }
+
+  throw lastError || new Error("The AI service is currently experiencing high demand. Please try again in a few moments.");
+}
+
 app.post("/api/chat", async (req, res) => {
   try {
     const { messages } = req.body;
@@ -135,14 +248,7 @@ app.post("/api/chat", async (req, res) => {
       parts: [{ text: msg.content }],
     }));
 
-    const response = await client.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: geminiContents,
-      config: {
-        systemInstruction,
-        temperature: 0.7,
-      },
-    });
+    const response = await generateContentWithRetry(client, geminiContents);
 
     const reply = response.text || "I was unable to formulate a response. Please try again.";
     res.json({

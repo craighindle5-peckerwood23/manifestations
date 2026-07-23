@@ -29,9 +29,13 @@ import {
   FolderArchive,
   MessageSquare,
   LayoutGrid,
-  LayoutList
+  LayoutList,
+  Search,
+  Cpu,
+  Bot
 } from "lucide-react";
 import { FileSnippet, Message, ExecutionResult, Language } from "./types";
+import { OrchestratorSuite } from "./components/OrchestratorSuite";
 import JSZip from "jszip";
 import {
   initAuth,
@@ -295,12 +299,13 @@ What should we build first?`,
 
   // Modal / File actions state
   const [layoutMode, setLayoutMode] = useState<"dashboard" | "tabs">("tabs");
-  const [activeMainTab, setActiveMainTab] = useState<"chat" | "editor" | "files">("editor");
+  const [activeMainTab, setActiveMainTab] = useState<"chat" | "editor" | "files" | "orchestrator">("editor");
   const [isCreatingFile, setIsCreatingFile] = useState<boolean>(false);
   const [newFileName, setNewFileName] = useState<string>("");
   const [newFileLang, setNewFileLang] = useState<Language>("javascript");
   const [fileSearch, setFileSearch] = useState<string>("");
   const [saveStatus, setSaveStatus] = useState<"saved" | "unsaved" | "saving">("saved");
+  const [terminalSearch, setTerminalSearch] = useState<string>("");
 
   // ZIP Import State
   const [isImportingZip, setIsImportingZip] = useState<boolean>(false);
@@ -1540,6 +1545,22 @@ print("=" * 40)`;
             <FolderCode size={13} />
             <span>📁 Explorer & Sync</span>
           </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setLayoutMode("tabs");
+              setActiveMainTab("orchestrator");
+            }}
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+              layoutMode === "tabs" && activeMainTab === "orchestrator"
+                ? "bg-amber-600 text-white shadow-md shadow-amber-600/15"
+                : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/45"
+            }`}
+          >
+            <Cpu size={13} />
+            <span>🤖 Multi-Agent Orchestrator</span>
+          </button>
         </div>
 
         {/* Right Side: Layout Controller (Grid vs Tabbed view) */}
@@ -2343,6 +2364,34 @@ print("=" * 40)`;
             {/* Mode B: Python / Node.js script Execution Terminal */}
             {runMode === "terminal" && (
               <div className="flex-1 flex flex-col bg-slate-950 font-mono text-xs overflow-hidden">
+                {/* Search / Filter bar */}
+                <div className="px-4 py-2 bg-slate-900/80 border-b border-slate-800/60 flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <Search size={12} className="text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={terminalSearch}
+                      onChange={(e) => setTerminalSearch(e.target.value)}
+                      placeholder="Filter terminal logs (e.g. error, success)..."
+                      className="w-full pl-8 pr-7 py-1 bg-slate-950 border border-slate-850 rounded-lg text-xs text-slate-300 font-mono focus:outline-none focus:border-indigo-500/70 placeholder:text-slate-600"
+                    />
+                    {terminalSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setTerminalSearch("")}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-500 hover:text-slate-300 transition-colors"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                  {terminalSearch && (
+                    <div className="text-[10px] text-indigo-400 bg-indigo-950/30 px-2 py-0.5 rounded border border-indigo-900/30 font-mono whitespace-nowrap">
+                      Filtered Logs
+                    </div>
+                  )}
+                </div>
+
                 {/* Console Log Panel */}
                 <div className="flex-1 overflow-y-auto p-4 space-y-2 select-text scrollbar-thin">
                   {execResult.status === "idle" && (
@@ -2359,18 +2408,59 @@ print("=" * 40)`;
                   )}
 
                   {/* Stdout Output Stream */}
-                  {execResult.stdout && (
-                    <pre className="text-slate-200 whitespace-pre-wrap font-mono leading-relaxed select-text animate-fade-in">
-                      {execResult.stdout}
-                    </pre>
-                  )}
+                  {execResult.stdout && (() => {
+                    const originalLines = execResult.stdout.split("\n");
+                    const filteredLines = terminalSearch 
+                      ? originalLines.filter(line => line.toLowerCase().includes(terminalSearch.toLowerCase()))
+                      : originalLines;
+                    
+                    if (terminalSearch && filteredLines.length === 0) {
+                      return null;
+                    }
+                    
+                    return (
+                      <pre className="text-slate-200 whitespace-pre-wrap font-mono leading-relaxed select-text animate-fade-in">
+                        {filteredLines.join("\n")}
+                      </pre>
+                    );
+                  })()}
 
                   {/* Stderr Output Stream */}
-                  {execResult.stderr && (
-                    <pre className="text-red-400 whitespace-pre-wrap font-mono leading-relaxed select-text bg-red-950/20 p-3 rounded-lg border border-red-900/30">
-                      {execResult.stderr}
-                    </pre>
-                  )}
+                  {execResult.stderr && (() => {
+                    const originalLines = execResult.stderr.split("\n");
+                    const filteredLines = terminalSearch 
+                      ? originalLines.filter(line => line.toLowerCase().includes(terminalSearch.toLowerCase()))
+                      : originalLines;
+                    
+                    if (terminalSearch && filteredLines.length === 0) {
+                      return null;
+                    }
+                    
+                    return (
+                      <pre className="text-red-400 whitespace-pre-wrap font-mono leading-relaxed select-text bg-red-950/20 p-3 rounded-lg border border-red-900/30">
+                        {filteredLines.join("\n")}
+                      </pre>
+                    );
+                  })()}
+
+                  {/* No matching logs notice */}
+                  {terminalSearch && (() => {
+                    const stdoutMatches = execResult.stdout 
+                      ? execResult.stdout.split("\n").filter(line => line.toLowerCase().includes(terminalSearch.toLowerCase())).length 
+                      : 0;
+                    const stderrMatches = execResult.stderr 
+                      ? execResult.stderr.split("\n").filter(line => line.toLowerCase().includes(terminalSearch.toLowerCase())).length 
+                      : 0;
+                    
+                    if (stdoutMatches === 0 && stderrMatches === 0 && execResult.status !== "idle") {
+                      return (
+                        <div className="text-slate-500 italic py-2">
+                          No log lines matching "{terminalSearch}" were found in this execution session.
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
 
                   {/* Failure errors */}
                   {execResult.error && (
@@ -2397,6 +2487,31 @@ print("=" * 40)`;
               </div>
             )}
           </div>
+          </section>
+        )}
+
+        {/* ========================================================= */}
+        {/* PANEL 4: Repo-Native Multi-Agent Orchestrator Studio */}
+        {/* ========================================================= */}
+        {layoutMode === "tabs" && activeMainTab === "orchestrator" && (
+          <section className="col-span-1 h-full overflow-hidden flex flex-col bg-slate-950">
+            <OrchestratorSuite
+              files={files}
+              activeFile={activeFile}
+              onUpdateFileCode={(fileId, newCode) => setFiles(prev => prev.map(f => f.id === fileId ? { ...f, code: newCode } : f))}
+              onCreateNewFile={(name, lang, code) => {
+                const newSnippet: FileSnippet = {
+                  id: `file_${Date.now()}`,
+                  name,
+                  language: lang,
+                  code: code || `// Snippet generated by Multi-Agent Suite\n`,
+                  description: "Agent generated snippet"
+                };
+                setFiles((prev) => [...prev, newSnippet]);
+                setActiveFileId(newSnippet.id);
+                setActiveMainTab("editor");
+              }}
+            />
           </section>
         )}
 
